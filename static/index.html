@@ -23,9 +23,10 @@
   }
   header.top h1 { font-size: 20px; font-weight: 650; margin: 0; }
   header.top .tag { color: var(--text-dim); font-size: 12.5px; }
-  .layout { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; }
+  .layout { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; align-items: start; }
   @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  .video-panel { position: sticky; top: 20px; }
   .drop {
     border: 1px dashed var(--line); border-radius: var(--radius); padding: 40px 20px;
     text-align: center; color: var(--text-dim); cursor: pointer;
@@ -51,6 +52,10 @@
     width: 56px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
     border-radius: 5px; padding: 6px 8px; font-size: 13px; font-family: inherit;
   }
+  .length-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .length-row label.auto { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; }
+  .length-row input[type="checkbox"] { accent-color: var(--amber); width: 14px; height: 14px; }
+  .length-row.disabled { opacity: .45; pointer-events: none; }
   #aiBox textarea {
     width: 100%; resize: vertical; background: var(--panel-2); border: 1px solid var(--line);
     color: var(--text); border-radius: 5px; padding: 8px 9px; font-family: inherit; font-size: 13px;
@@ -63,12 +68,31 @@
   .clip-head .name { font-size: 13px; font-weight: 600; }
   .clip-head .dur { font-size: 11.5px; color: var(--text-dim); }
   .clip-reason { margin-top: 4px; font-size: 12px; color: var(--text-dim); }
-  .clip-edit { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-  .clip-edit label { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 4px; }
-  .clip-edit input[type="number"] {
+  .clip-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .clip-edit-nums { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .clip-edit-nums label { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 4px; }
+  .clip-edit-nums input[type="number"] {
     width: 72px; background: var(--panel); border: 1px solid var(--line); color: var(--text);
     border-radius: 4px; padding: 4px 6px; font-size: 12px; font-family: inherit;
   }
+  .trim-sliders { display: flex; flex-direction: column; gap: 6px; }
+  .trim-row { display: flex; align-items: center; gap: 8px; }
+  .trim-row .trim-label { width: 34px; font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+  .trim-row input[type="range"] {
+    flex: 1; accent-color: var(--amber); height: 4px; cursor: pointer;
+  }
+  .trim-bar {
+    position: relative; height: 6px; background: var(--panel); border-radius: 3px;
+    border: 1px solid var(--line); overflow: hidden;
+  }
+  .trim-bar-fill {
+    position: absolute; top: 0; bottom: 0; background: var(--teal); opacity: .55; border-radius: 2px;
+  }
+  .trim-bar-marker {
+    position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text); z-index: 1;
+  }
+  .trim-row input[type="range"].scrub { accent-color: var(--teal); }
+  .trim-row.scrub-row { margin-top: 2px; }
   .clip-actions { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
   .clip-status { margin-top: 6px; font-size: 11.5px; color: var(--teal); }
   .clip-status.err { color: var(--danger); }
@@ -90,7 +114,7 @@
   <div id="errBanner" class="warn" style="display:none;"></div>
 
   <div class="layout">
-    <div class="panel">
+    <div class="panel video-panel">
       <div id="dropZone" class="drop">
         <span class="reel">🎞️</span>
         <div>Drop a video here, or click to choose one</div>
@@ -112,6 +136,15 @@
       <div class="target-row">
         <input type="number" id="targetCount" min="1" max="20" value="3">
         <span class="empty-note" style="padding:0;">clips to find</span>
+      </div>
+
+      <h2>Clip length</h2>
+      <div class="length-row">
+        <label class="auto"><input type="checkbox" id="autoLength" checked> AUTO — let the AI decide each clip's length</label>
+      </div>
+      <div class="length-row disabled" id="lengthNumberRow">
+        <input type="number" id="targetLength" min="2" max="180" step="1" value="15">
+        <span class="empty-note" style="padding:0;">seconds per clip</span>
       </div>
 
       <h2>Find clips with AI</h2>
@@ -142,7 +175,12 @@
   const dropZone = $('dropZone'), fileInput = $('fileInput'), playerWrap = $('playerWrap');
   const video = $('video'), newVideoBtn = $('newVideo'), uploadStatus = $('uploadStatus');
   const targetCount = $('targetCount'), aiQuery = $('aiQuery'), aiFindBtn = $('aiFind'), aiStatus = $('aiStatus');
+  const autoLength = $('autoLength'), lengthNumberRow = $('lengthNumberRow'), targetLength = $('targetLength');
   const clipListEl = $('clipList'), emptyNote = $('emptyNote'), exportAllBtn = $('exportAll'), errBanner = $('errBanner');
+
+  autoLength.addEventListener('change', () => {
+    lengthNumberRow.classList.toggle('disabled', autoLength.checked);
+  });
 
   let jobId = null;
   let clips = []; // {id, start, end, reason}
@@ -160,14 +198,28 @@
     return m + ':' + s;
   }
 
+  // Ticks a "… Xs elapsed" line into statusEl while a request is in flight.
+  // Returns a stop() function; call it once the response arrives.
+  function startLiveTimer(statusEl, label) {
+    const t0 = performance.now();
+    const tick = () => {
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      statusEl.textContent = label + ' — ' + secs + 's elapsed';
+    };
+    tick();
+    const id = setInterval(tick, 200);
+    return () => clearInterval(id);
+  }
+
   async function uploadFile(file) {
     if (!file) return;
     dropZone.style.display = 'none';
     playerWrap.style.display = 'block';
-    uploadStatus.textContent = 'Uploading & transcribing… this can take a while for long videos.';
     aiFindBtn.disabled = true;
     clips = []; clipSeq = 1;
     renderClips();
+
+    const stopTimer = startLiveTimer(uploadStatus, 'Uploading & transcribing…');
 
     const fd = new FormData();
     fd.append('file', file);
@@ -177,10 +229,14 @@
       if (!res.ok) throw new Error(data.detail || 'Upload failed');
       jobId = data.job_id;
       video.src = '/api/video/' + jobId;
-      uploadStatus.textContent = 'Transcribed ' + data.segment_count + ' segments (' + fmt(data.duration) + ').';
+      const cacheNote = data.cached ? ' (reused cached transcript)' : '';
+      uploadStatus.textContent = 'Transcribed ' + data.segment_count + ' segments (' + fmt(data.duration) +
+        ') in ' + data.elapsed_seconds.toFixed(1) + 's' + cacheNote + '.';
       aiFindBtn.disabled = false;
     } catch (err) {
       uploadStatus.textContent = 'Error: ' + err.message;
+    } finally {
+      stopTimer();
     }
   }
 
@@ -205,17 +261,30 @@
     exportAllBtn.disabled = clips.length === 0;
 
     clips.forEach((clip, idx) => {
+      const maxDur = (isFinite(video.duration) && video.duration > 0) ? video.duration : Math.max(clip.end + 30, 60);
+
       const el = document.createElement('div');
       el.className = 'clip';
       el.innerHTML =
         '<div class="clip-head"><span class="name">Clip ' + (idx + 1) + '</span>' +
         '<span class="dur mono">' + (clip.end - clip.start).toFixed(1) + 's</span></div>' +
-        '<div class="clip-edit">' +
-        '<label>Start <input type="number" class="mono" data-field="start" step="0.1" min="0" value="' + clip.start.toFixed(1) + '"></label>' +
-        '<label>End <input type="number" class="mono" data-field="end" step="0.1" min="0" value="' + clip.end.toFixed(1) + '"></label>' +
-        '<button class="small ghost" data-act="save">Save adjustment</button>' +
-        '</div>' +
         (clip.reason ? '<div class="clip-reason">' + clip.reason.replace(/</g, '&lt;') + '</div>' : '') +
+        '<div class="clip-edit">' +
+          '<div class="trim-sliders">' +
+            '<div class="trim-row"><span class="trim-label">In</span>' +
+              '<input type="range" data-role="startRange" min="0" max="' + maxDur + '" step="0.1" value="' + clip.start + '"></div>' +
+            '<div class="trim-bar"><div class="trim-bar-fill" data-role="fill"></div><div class="trim-bar-marker" data-role="marker"></div></div>' +
+            '<div class="trim-row"><span class="trim-label">Out</span>' +
+              '<input type="range" data-role="endRange" min="0" max="' + maxDur + '" step="0.1" value="' + clip.end + '"></div>' +
+            '<div class="trim-row scrub-row"><span class="trim-label">Scrub</span>' +
+              '<input type="range" class="scrub" data-role="previewRange" min="' + clip.start + '" max="' + clip.end + '" step="0.05" value="' + clip.start + '"></div>' +
+          '</div>' +
+          '<div class="clip-edit-nums">' +
+            '<label>Start <input type="number" class="mono" data-field="start" step="0.1" min="0" value="' + clip.start.toFixed(1) + '"></label>' +
+            '<label>End <input type="number" class="mono" data-field="end" step="0.1" min="0" value="' + clip.end.toFixed(1) + '"></label>' +
+            '<button class="small ghost" data-act="save">Save adjustment</button>' +
+          '</div>' +
+        '</div>' +
         '<div class="clip-actions">' +
         '<button class="small ghost" data-act="preview">Preview</button>' +
         '<button class="small ghost" data-act="export">Download</button>' +
@@ -225,6 +294,69 @@
 
       const startInput = el.querySelector('[data-field="start"]');
       const endInput = el.querySelector('[data-field="end"]');
+      const startRange = el.querySelector('[data-role="startRange"]');
+      const endRange = el.querySelector('[data-role="endRange"]');
+      const previewRange = el.querySelector('[data-role="previewRange"]');
+      const fill = el.querySelector('[data-role="fill"]');
+      const marker = el.querySelector('[data-role="marker"]');
+      const durEl = el.querySelector('.dur');
+
+      // Keeps the number inputs, the In/Out range "scrollers", and the
+      // highlighted region on the trim bar all in sync, whichever one
+      // the person just moved. Values aren't committed to the clip
+      // object until "Save adjustment" is clicked. The scrub knob's own
+      // range is re-clamped to the current In/Out bounds every time.
+      function syncFromValues(start, end) {
+        if (end <= start) end = start + 0.1;
+        startInput.value = start.toFixed(1);
+        endInput.value = end.toFixed(1);
+        startRange.value = start;
+        endRange.value = end;
+        const left = (start / maxDur) * 100;
+        const width = ((end - start) / maxDur) * 100;
+        fill.style.left = left + '%';
+        fill.style.width = Math.max(width, 0.5) + '%';
+        durEl.textContent = (end - start).toFixed(1) + 's';
+
+        previewRange.min = start;
+        previewRange.max = end;
+        let scrub = parseFloat(previewRange.value);
+        if (isNaN(scrub) || scrub < start || scrub > end) scrub = start;
+        previewRange.value = scrub;
+        marker.style.left = ((scrub / maxDur) * 100) + '%';
+      }
+      syncFromValues(clip.start, clip.end);
+
+      startRange.addEventListener('input', () => {
+        let s = parseFloat(startRange.value), e = parseFloat(endRange.value);
+        if (s >= e) s = Math.max(0, e - 0.1);
+        syncFromValues(s, e);
+        video.currentTime = s;
+      });
+      endRange.addEventListener('input', () => {
+        let s = parseFloat(startRange.value), e = parseFloat(endRange.value);
+        if (e <= s) e = Math.min(maxDur, s + 0.1);
+        syncFromValues(s, e);
+        video.currentTime = e;
+      });
+      startInput.addEventListener('input', () => {
+        const s = parseFloat(startInput.value), e = parseFloat(endInput.value);
+        if (!isNaN(s) && !isNaN(e)) syncFromValues(s, e);
+      });
+      endInput.addEventListener('input', () => {
+        const s = parseFloat(startInput.value), e = parseFloat(endInput.value);
+        if (!isNaN(s) && !isNaN(e)) syncFromValues(s, e);
+      });
+
+      // Scrub knob: moves independently within [start, end] to let the
+      // person review what's actually inside the clip's timeframe,
+      // without resetting to the beginning of the clip each time.
+      previewRange.addEventListener('input', () => {
+        const pos = parseFloat(previewRange.value);
+        marker.style.left = ((pos / maxDur) * 100) + '%';
+        video.pause();
+        video.currentTime = pos;
+      });
 
       el.querySelector('[data-act="save"]').addEventListener('click', () => {
         const statusEl = document.getElementById('status-' + clip.id);
@@ -240,13 +372,13 @@
         clip.end = Math.min(dur, newEnd);
         statusEl.textContent = 'Adjusted ✓ — download will use the new range.';
         statusEl.className = 'clip-status';
-        el.querySelector('.dur').textContent = (clip.end - clip.start).toFixed(1) + 's';
       });
 
       el.querySelector('[data-act="preview"]').addEventListener('click', () => {
-        video.currentTime = clip.start;
+        const from = parseFloat(previewRange.value);
+        video.currentTime = isNaN(from) ? parseFloat(startInput.value) : from;
         video.play();
-        const stop = () => { if (video.currentTime >= clip.end) { video.pause(); video.removeEventListener('timeupdate', stop); } };
+        const stop = () => { if (video.currentTime >= parseFloat(endInput.value)) { video.pause(); video.removeEventListener('timeupdate', stop); } };
         video.addEventListener('timeupdate', stop);
       });
       el.querySelector('[data-act="export"]').addEventListener('click', () => exportClip(clip));
@@ -297,12 +429,13 @@
     const query = aiQuery.value.trim();
     if (!query || !jobId) return;
     aiFindBtn.disabled = true;
-    aiStatus.textContent = 'Thinking…';
+    const stopTimer = startLiveTimer(aiStatus, 'Thinking…');
     try {
       const fd = new FormData();
       fd.append('job_id', jobId);
       fd.append('query', query);
       fd.append('count', targetCount.value || '3');
+      fd.append('target_length', autoLength.checked ? 'auto' : (targetLength.value || '15'));
       const res = await fetch('/api/find-clips', { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Request failed');
@@ -310,10 +443,12 @@
         clips.push({ id: clipSeq++, start: c.start, end: c.end, reason: c.reason || '' });
       }
       renderClips();
-      aiStatus.textContent = 'Added ' + data.clips.length + ' clip' + (data.clips.length === 1 ? '' : 's') + '.';
+      aiStatus.textContent = 'Added ' + data.clips.length + ' clip' + (data.clips.length === 1 ? '' : 's') +
+        ' in ' + data.elapsed_seconds.toFixed(1) + 's.';
     } catch (err) {
       aiStatus.textContent = 'Error: ' + err.message;
     } finally {
+      stopTimer();
       aiFindBtn.disabled = false;
     }
   }

@@ -45,6 +45,17 @@ Everything is controlled by environment variables — set them before running
 | `WHISPER_COMPUTE`  | `int8`                   | `int8` (fastest on CPU), `float16` (best on GPU), `float32`. |
 | `OLLAMA_URL`       | `http://localhost:11434` | Change if Ollama runs elsewhere (another machine, a container). |
 | `OLLAMA_MODEL`     | `llama3.1`                | Any model you've pulled with `ollama pull`. |
+| `WHISPER_VAD`      | `1`                       | Voice-activity detection: skips silent/non-speech stretches instead of transcribing them. Free speed-up; set to `0` to disable. |
+| `WHISPER_BATCHED`  | `0`                       | Batched inference: transcribes multiple audio chunks at once instead of strictly one-by-one. Biggest win on GPU, can help on multi-core CPU too. Set to `1` to enable. |
+| `WHISPER_BATCH_SIZE` | `8`                     | Chunk batch size when `WHISPER_BATCHED=1`. Higher uses more memory/VRAM but can be faster. |
+| `TRANSCRIPT_CACHE` | `1`                       | Skips re-transcribing a video you've already uploaded before (matched by file content, not filename). Set to `0` to disable. |
+
+### Why uploads are faster now
+
+- Audio is extracted to a small mono 16kHz WAV with `ffmpeg` before transcription, instead of letting Whisper demux the full video container itself — faster for large video files, especially ones with heavy/high-bitrate video streams.
+- `WHISPER_VAD=1` (default) skips silent stretches instead of spending model time on them.
+- `WHISPER_BATCHED=1` processes several audio chunks in parallel rather than one after another — most effective on GPU.
+- Re-uploading the exact same video file reuses the cached transcript instantly instead of re-running Whisper.
 
 Example, running a bigger transcription model on a GPU with a stronger LLM:
 
@@ -72,3 +83,24 @@ To keep it running and reachable beyond your own machine:
   "Find clips" will fail with a clear error rather than hanging silently.
 - `/api/health` shows current config and whether ffmpeg was found — useful
   for a quick sanity check after setup.
+
+## How clip picking works, and how to improve it further
+
+"Find clips" now asks the model to score several candidate moments (more
+than you asked for) rather than commit to the final answer in one shot, then
+picks the highest-scoring ones that don't overlap in code. This tends to
+produce noticeably better picks than asking for the final N directly, and
+runs at `temperature=0.2` so picks are consistent rather than random. The
+transcript it reasons over is also merged into full sentences first, since
+raw Whisper segments are often mid-sentence fragments.
+
+Everything here is local (faster-whisper + Ollama), so none of this costs
+anything to run or tune. If you want even better judgment:
+
+- **Use a bigger Ollama model.** This is the single biggest lever —
+  `ollama pull qwen2.5:32b` (or `llama3.1:70b` if your machine can run it)
+  reasons about "funny" or "intriguing" moments noticeably better than an
+  8B model. Set `OLLAMA_MODEL` to match.
+- **Be specific in your request.** "The funniest moment" gives the model
+  less to work with than "the moment where he trips over the dog and everyone
+  laughs."
